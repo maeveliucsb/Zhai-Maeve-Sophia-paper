@@ -1,0 +1,394 @@
+---
+title: "Exploration_WVS"
+output: html_document
+date: "2025-02-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r library}
+library(tidyverse) 
+library(sf) 
+library(here) 
+library(stars) 
+library(tmap) 
+library(viridis) 
+library(readr)
+library(dplyr)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(lubridate)
+library(terra)
+library(exactextractr)
+library(readr)
+library(ggplot2)
+library (kableExtra)
+library(countrycode)
+library(geosphere)
+```
+
+```{r loading data}
+#Loading data on migration
+migration.raw <- read.csv("dataofmigration.csv")
+
+#str(migration.raw)
+
+country <- unique(migration.raw$Origin)
+write.csv(country, "country.csv")
+
+migration.raw[migration.raw$Origin == "Others",] <- NA
+
+#Loading data from World Value Survey 2017
+data.raw <- read.csv("wvs2017.csv")
+#str(data.raw)
+
+```
+
+# Section 1: Migration Flow
+
+Note: The migration flow that I have created is only for 2024. The data lives in data/dataofmigration.csv, categorized in migration.raw
+
+The migration data is derived from the International Organization of Migration.
+
+The chunk below is analyzing in dyad, but please feel free to do something else. 
+
+```{r migration flows in 2024, echo=FALSE}
+#Understanding migration flows only for 2024
+require(data.table)
+dt <- data.table(migration.raw)
+View(dt[, max(X2024), by = Origin])
+
+max.migration <- data.frame(tapply(migration.raw$X2024, migration.raw$Origin, na.rm = TRUE))
+max.migration
+
+#Highest dyad of migration
+# Convert to data.table
+migrationdyad <- data.table(migration.raw)
+
+# Get rows with the max value of X2024 for each Destination
+migration.dyad <- migrationdyad[migrationdyad[, .I[which.max(X2024)], by = Destination]$V1]
+
+# View result
+View(migration.dyad)
+
+View(table(migration.dyad$Origin))
+
+#Dyad
+# Ensure dyads are treated as unordered pairs
+migrationdyad.df <- migration.raw %>%
+  rowwise() %>%
+  mutate(dyad = paste(sort(c(Origin, Destination)), collapse = "-")) %>%
+  ungroup()
+
+# Get the maximum value for each dyad
+migration.result <- migrationdyad.df %>%
+  group_by(dyad) %>%
+  summarise(max_value = max(X2024))
+
+View(migration.result)
+
+```
+
+
+# Relevant Questions in World Value Survey
+
+Country - B_Country_Alpha, numbered. Let's look at dyads
+- SEA: Malaysia, MYS; Myanmar MMR
+- 
+
+Climate Concern
+- Q70: Confidence: The Environmental Protection Movement
+- Q111 Protecting environment vs. Economic growth
+
+
+Migration
+- Q121 Impact of immigrants on the development of the country
+- Q122 Immigration in your country: Fills useful jobs in the workforce
+- Q123 Immigration in your country: Strengthens cultural diversity
+- Q124 Immigration in your country: Increases the crime rate
+- Q125 Immigration in your country: Gives asylum to political refugees
+- Q126 Immigration in your country: Increases the risks of terrorism
+- Q127 Immigration in your country: Helps poor people establish new lives
+- Q128 Immigration in your country: Increases unemployment
+- Q129 Immigration in your country: Leads to social conflict
+- Q130 Immigration policy preference
+- 
+
+Control
+- Q60: Trust: People you know personally
+- Q61: Trust: People you meet for the first time
+- Q62: Trust: People of another religion
+- Q63: Trust: People of another nationality
+
+
+```{r country effect}
+#Country Fixed Effect to see if there is an effect
+#EnvQ70 = Crimerate124 + fixed
+test.df <- data.raw
+
+climate <- lm(Q124 ~ Q111 + B_COUNTRY_ALPHA + polity, data = test.df)
+summary(climate)
+
+```
+# maeve maps! yippee :) 
+```{r}
+# ------------------ Data ------------------
+# Expectation: migration.raw has columns: Origin, Destination, X2024 (numeric)
+# You already have: migration.raw
+stopifnot(all(c("Origin","Destination","X2024") %in% names(migration.raw)))
+
+mig <- migration.raw %>%
+  mutate(
+    X2024 = suppressWarnings(as.numeric(X2024))
+  ) %>%
+  filter(!is.na(X2024), X2024 > 0,
+         !is.na(Origin), !is.na(Destination),
+         Origin != Destination)
+
+# ------------------ Define "colonial powers" ------------------
+# Tweak this vector if your definition differs.
+colonial_powers_names <- c(
+  "United Kingdom","France","Spain","Portugal","Netherlands",
+  "Belgium","Italy","Germany","Denmark"
+)
+# Optional: include others if analytically justified:
+# colonial_powers_names <- c(colonial_powers_names, "Russia", "Turkey", "United States")
+
+# ------------------ Standardize country names -> ISO3 ------------------
+# Handle common name issues via countrycode (add manual overrides as needed)
+custom_map <- c(
+  "Congo, Dem. Rep."       = "COD",
+  "Congo, Rep."            = "COG",
+  "Côte d’Ivoire"          = "CIV",
+  "Cote d'Ivoire"          = "CIV",
+  "Eswatini"               = "SWZ",
+  "Kyrgyz Republic"        = "KGZ",
+  "Korea, Rep."            = "KOR",
+  "Korea, Dem. Rep."       = "PRK",
+  "Lao PDR"                = "LAO",
+  "Micronesia, Fed. Sts."  = "FSM",
+  "Russian Federation"     = "RUS",
+  "Syrian Arab Republic"   = "SYR",
+  "United States of America" = "USA",
+  "United States"          = "USA",
+  "Viet Nam"               = "VNM"
+)
+
+to_iso3 <- function(x){
+  iso <- countrycode(x, "country.name", "iso3c", warn = FALSE)
+  # apply manual overrides where needed
+  idx <- is.na(iso) & (x %in% names(custom_map))
+  iso[idx] <- custom_map[x[idx]]
+  iso
+}
+
+mig <- mig %>%
+  mutate(
+    origin_iso3 = to_iso3(Origin),
+    dest_iso3   = to_iso3(Destination)
+  ) %>%
+  filter(!is.na(origin_iso3), !is.na(dest_iso3))
+
+cp_iso3 <- to_iso3(colonial_powers_names)
+cp_iso3 <- cp_iso3[!is.na(cp_iso3)]
+
+# Keep flows where the origin is a colonial power
+flows_cp <- mig %>%
+  filter(origin_iso3 %in% cp_iso3) %>%
+  group_by(origin_iso3, dest_iso3, Origin, Destination) %>%
+  summarise(value_2024 = sum(X2024, na.rm = TRUE), .groups = "drop")
+
+# ------------------ World geometries and centroids ------------------
+world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf") %>%
+  st_transform(4326) %>%
+  select(iso_a3, name, geometry)
+
+# Use safe point-on-surface for label/centroid positions
+world_pts <- world %>%
+  mutate(centroid = st_point_on_surface(geometry)) %>%
+  st_as_sf() %>%
+  st_transform(4326) %>%
+  st_drop_geometry() %>%
+  select(iso_a3, name) %>%
+  left_join(
+    world %>%
+      st_point_on_surface() %>%
+      st_coordinates() %>%
+      as.data.frame() %>%
+      mutate(iso_a3 = world$iso_a3),
+    by = "iso_a3"
+  ) %>%
+  rename(lon = X, lat = Y)
+
+# Join coordinates for origins and destinations
+flows_coords <- flows_cp %>%
+  left_join(world_pts %>% select(iso_a3, lon_o = lon, lat_o = lat),
+            by = c("origin_iso3" = "iso_a3")) %>%
+  left_join(world_pts %>% select(iso_a3, lon_d = lon, lat_d = lat),
+            by = c("dest_iso3" = "iso_a3")) %>%
+  filter(!is.na(lon_o), !is.na(lat_o), !is.na(lon_d), !is.na(lat_d))
+
+# ------------------ Build great-circle lines ------------------
+# For performance/readability, keep top N flows (adjust N)
+N <- 300
+flows_top <- flows_coords %>%
+  arrange(desc(value_2024)) %>%
+  slice_head(n = N)
+
+# Create great-circle segments as sf MULTILINESTRING
+gc_lines <- lapply(seq_len(nrow(flows_top)), function(i){
+  p1 <- c(flows_top$lon_o[i], flows_top$lat_o[i])
+  p2 <- c(flows_top$lon_d[i], flows_top$lat_d[i])
+  # more points -> smoother arc
+  gci <- geosphere::gcIntermediate(p1, p2, n = 50, addStartEnd = TRUE, breakAtDateLine = TRUE)
+  # gcIntermediate returns either a matrix or a list (if dateline break)
+  if (is.list(gci)) {
+    parts <- lapply(gci, function(m) st_linestring(m))
+    st_multilinestring(parts)
+  } else {
+    st_linestring(gci)
+  }
+})
+
+flows_sf <- st_sf(
+  origin = flows_top$Origin,
+  destination = flows_top$Destination,
+  origin_iso3 = flows_top$origin_iso3,
+  dest_iso3   = flows_top$dest_iso3,
+  value_2024  = flows_top$value_2024,
+  geometry    = st_sfc(gc_lines, crs = 4326)
+)
+
+# Label colonial power (origin country) for color mapping
+flows_sf <- flows_sf %>%
+  mutate(origin_power = countrycode(origin_iso3, "iso3c", "country.name"))
+library(scales)
+
+# ------------------ Scaling for line width ------------------
+# sqrt scaling helps compress the long tail
+flows_sf <- flows_sf %>%
+  mutate(
+    lw = rescale(sqrt(value_2024), to = c(0.6, 6)) # adjust min/max widths if needed
+  )
+
+# ------------------ Basemap & destination points ------------------
+dest_pts <- world_pts %>%
+  inner_join(flows_sf %>% st_drop_geometry() %>% distinct(dest_iso3, destination),
+             by = c("iso_a3" = "dest_iso3")) %>%
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
+
+origin_pts <- world_pts %>%
+  inner_join(flows_sf %>% st_drop_geometry() %>% distinct(origin_iso3, origin_power),
+             by = c("iso_a3" = "origin_iso3")) %>%
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
+
+# ------------------ Map (interactive) ------------------
+tm_shape(world) + tm_polygons(col = "grey95", border.col = "white") +
+  tm_shape(flows_sf) +
+  tm_lines(
+    lwd   = "lw",
+    col   = "origin_power",
+    alpha = 0.65,
+    title.col = "Origin (colonial power)",
+    legend.lwd.show = FALSE
+  ) +
+  tm_shape(dest_pts) +
+  tm_dots(size = 0.04, col = "grey25", alpha = 0.8, shape = 21,
+          title = "Destinations") +
+  tm_shape(origin_pts) +
+  tm_symbols(shape = 24, col = "black", size = 0.15, border.lwd = 0.5,
+             legend.show = FALSE) +
+  tm_layout(
+    frame = FALSE,
+    legend.outside = TRUE,
+    legend.title.size = 1.0,
+    legend.text.size  = 0.8,
+    title = "Where people from colonial powers are going (2024 flows)"
+  )
+
+# ------------------ OPTIONAL: quick summary tables ------------------
+# Top destinations by aggregate inflow from colonial powers
+top_dest <- flows_cp %>%
+  group_by(dest_iso3, Destination) %>%
+  summarise(inflow_from_colonial = sum(value_2024), .groups = "drop") %>%
+  arrange(desc(inflow_from_colonial)) %>%
+  slice_head(n = 20)
+
+print(top_dest)
+
+# Flows by power -> destination (wide)
+flows_wide <- flows_cp %>%
+  mutate(origin_power = countrycode(origin_iso3, "iso3c", "country.name")) %>%
+  group_by(origin_power, Destination) %>%
+  summarise(value_2024 = sum(value_2024), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = origin_power, values_from = value_2024, values_fill = 0)
+
+# View(flows_wide)  # uncomment in RStudio
+
+```
+
+```{r}
+tmap_mode("view")
+
+# Helper: available origins to pick from
+available_powers <- sort(unique(flows_sf$origin_power))
+print(available_powers)
+
+make_map_view <- function(power){
+  # 1) validate name (allow iso3 too)
+  pow_iso <- tryCatch(countrycode(power, "country.name", "iso3c"), error = function(...) NA_character_)
+  has_name <- power %in% flows_sf$origin_power
+  has_iso  <- !is.na(pow_iso) && pow_iso %in% flows_sf$origin_iso3
+  if (!has_name && !has_iso) {
+    stop(sprintf("'%s' not found. Try one of: %s",
+                 power, paste(available_powers, collapse = ", ")))
+  }
+
+  # 2) subset flows + points
+  sub_flows <- dplyr::filter(
+    flows_sf,
+    if (has_name) origin_power == power else origin_iso3 == pow_iso
+  )
+
+  if (nrow(sub_flows) == 0 || length(sub_flows$geometry) == 0) {
+    # graceful fallback: world only with a message
+    message(sprintf("No flows for '%s' in flows_sf.", power))
+    return(
+      tm_shape(world) + tm_polygons(col = "grey95", border.col = "white") +
+        tm_layout(frame = FALSE, title = sprintf("%s: no 2024 flows in data", power))
+    )
+  }
+
+  sub_dest_iso <- unique(sub_flows$dest_iso3)
+  sub_orig_iso <- unique(sub_flows$origin_iso3)
+
+  sub_dest <- dplyr::filter(dest_pts, iso_a3 %in% sub_dest_iso)
+  sub_orig <- dplyr::filter(origin_pts, iso_a3 %in% sub_orig_iso)
+
+  # 3) zoom box (buffered bbox of flows)
+  bbox <- sf::st_bbox(sf::st_transform(sub_flows, 4326))
+  # pad a bit
+  pad <- 3
+  bbox[c("xmin","ymin","xmax","ymax")] <- c(bbox["xmin"]-pad, bbox["ymin"]-pad,
+                                             bbox["xmax"]+pad, bbox["ymax"]+pad)
+
+  # 4) build map
+  tm_shape(world) + tm_polygons(col = "grey95", border.col = "white") +
+    tm_shape(sub_flows) +
+    tm_lines(lwd = "lw", col = "origin_power", alpha = 0.7, title.col = "Origin") +
+    tm_shape(sub_dest) + tm_dots(size = 0.05, col = "grey25", alpha = 0.85, shape = 21) +
+    tm_shape(sub_orig) + tm_symbols(shape = 24, col = "black", size = 0.18, border.lwd = 0.6) +
+    tm_layout(frame = FALSE, legend.outside = TRUE,
+              title = sprintf("%s: where people are going (2024)", power)) +
+    tm_view(view.bounds = matrix(c(bbox["xmin"], bbox["ymin"],
+                                   bbox["xmax"], bbox["ymax"]), ncol = 2, byrow = TRUE))
+}
+
+# Example calls (pick from printed available_powers):
+#make_map_view("france")
+make_map_view("United Kingdom")
+# make_map_view("Portugal")
+
+```
