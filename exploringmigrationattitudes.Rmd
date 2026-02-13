@@ -33,8 +33,6 @@ library(geosphere)
 #Loading data on migration
 migration.raw <- read.csv("dataofmigration.csv")
 
-#str(migration.raw)
-
 country <- unique(migration.raw$Origin)
 write.csv(country, "country.csv")
 
@@ -44,96 +42,88 @@ migration.raw[migration.raw$Origin == "Others",] <- NA
 data.raw <- read.csv("wvs2017.csv")
 #str(data.raw)
 
+#Loading data for colonization
+colonialismqog.raw <- read.csv("colonialism.csv")
+
+# Reading colonization data
+colonisation.dyads <- read.csv("COLDAT_dyads.csv")
+
+colonisation.dyads <- colonisation.dyads %>%
+  mutate(colonisation_years = colend_mean - colstart_mean)
+
+# Renaming alternative colonization data
+colonalismqog.df <- colonialismqog.raw %>%
+  mutate(colonialnames = case_when(
+    ht_colonial == 0 ~ "Never",
+    ht_colonial == 1 ~ "Netherlands*",
+    ht_colonial == 2 ~ "Spain*",
+    ht_colonial == 3 ~ "Italy",
+    ht_colonial == 4 ~ "United States of America*",
+    ht_colonial == 5 ~ "United Kingdom*",
+    ht_colonial == 6 ~ "France*",
+    ht_colonial == 7 ~ "Portugal",
+    ht_colonial == 8 ~ "Belgium",
+    ht_colonial == 9 ~ "France*",
+    ht_colonial == 10 ~ "Australia*"
+  ))
+
 ```
 
 # Section 1: Migration Flow
 
-Note: The migration flow that I have created is only for 2024. The data lives in data/dataofmigration.csv, categorized in migration.raw
+Note: The migration flow that I have created is only for 2024. The data lives in data/dataofmigration.csv, categorized in migration.raw. The migration data is derived from the International Organization of Migration.
 
-The migration data is derived from the International Organization of Migration.
+## 1.1 merging migration data with colonization
 
-The chunk below is analyzing in dyad, but please feel free to do something else. 
+```{r migration and colonization}
+#Filtering for colonizers
+migration1.df <- migration.raw %>%
+  filter(Destination %in% c("Belgium", "United Kingdom*", "France*", "Germany", "Italy", "Netherlands*", "Portugal", "Spain*")) %>%
+    mutate(Destination = gsub("\\*", "", Destination))
 
-```{r migration flows in 2024, echo=FALSE}
-#Understanding migration flows only for 2024
-require(data.table)
-dt <- data.table(migration.raw)
-View(dt[, max(X2024), by = Origin])
+#Renaming colonizer to match
+colonisation1.dyads <- colonisation.dyads %>%
+  mutate(colonizer = case_when(
+    colonizer == "belgium" ~ "Belgium",
+    colonizer == "britain" ~ "United Kingdom",
+    colonizer == "france" ~ "France",
+    colonizer == "germany" ~ "Germany",
+    colonizer == "italy" ~ "Italy",
+    colonizer == "netherlands" ~ "Netherlands"
+  ))
+ 
+#Merging data with two conditions
+migrationcolonizer.df <- migration1.df %>%
+  left_join(colonisation1.dyads,
+            by = c("Destination" = "colonizer", "Origin" = "country"),
+            keep = TRUE)
 
-max.migration <- data.frame(tapply(migration.raw$X2024, migration.raw$Origin, na.rm = TRUE))
-max.migration
+#Column of colonizer
+migrationcolonizer.df <- migrationcolonizer.df %>%
+  mutate(colonizermatched = case_when(
+    col == 1 ~ colonizer,
+    TRUE ~ "None"
+  ))
 
-#Highest dyad of migration
-# Convert to data.table
-migrationdyad <- data.table(migration.raw)
-
-# Get rows with the max value of X2024 for each Destination
-migration.dyad <- migrationdyad[migrationdyad[, .I[which.max(X2024)], by = Destination]$V1]
-
-# View result
-View(migration.dyad)
-
-View(table(migration.dyad$Origin))
-
-#Dyad
-# Ensure dyads are treated as unordered pairs
-migrationdyad.df <- migration.raw %>%
-  rowwise() %>%
-  mutate(dyad = paste(sort(c(Origin, Destination)), collapse = "-")) %>%
-  ungroup()
-
-# Get the maximum value for each dyad
-migration.result <- migrationdyad.df %>%
-  group_by(dyad) %>%
-  summarise(max_value = max(X2024))
-
-View(migration.result)
-
-```
-
-
-# Relevant Questions in World Value Survey
-
-Country - B_Country_Alpha, numbered. Let's look at dyads
-- SEA: Malaysia, MYS; Myanmar MMR
-- 
-
-Climate Concern
-- Q70: Confidence: The Environmental Protection Movement
-- Q111 Protecting environment vs. Economic growth
-
-
-Migration
-- Q121 Impact of immigrants on the development of the country
-- Q122 Immigration in your country: Fills useful jobs in the workforce
-- Q123 Immigration in your country: Strengthens cultural diversity
-- Q124 Immigration in your country: Increases the crime rate
-- Q125 Immigration in your country: Gives asylum to political refugees
-- Q126 Immigration in your country: Increases the risks of terrorism
-- Q127 Immigration in your country: Helps poor people establish new lives
-- Q128 Immigration in your country: Increases unemployment
-- Q129 Immigration in your country: Leads to social conflict
-- Q130 Immigration policy preference
-- 
-
-Control
-- Q60: Trust: People you know personally
-- Q61: Trust: People you meet for the first time
-- Q62: Trust: People of another religion
-- Q63: Trust: People of another nationality
-
-
-```{r country effect}
-#Country Fixed Effect to see if there is an effect
-#EnvQ70 = Crimerate124 + fixed
-test.df <- data.raw
-
-climate <- lm(Q124 ~ Q111 + B_COUNTRY_ALPHA + polity, data = test.df)
-summary(climate)
+#Creating total proportion
+migrationcolonizer.df <- migrationcolonizer.df %>%
+  group_by(Destination) %>%
+  mutate(X1990prop = X1990/sum(X1990, na.rm = TRUE),
+         X1995prop = X1995/sum(X1995, na.rm = TRUE),
+         X2000prop = X2000/sum(X2000, na.rm = TRUE),
+         X2005prop = X2005/sum(X2005, na.rm = TRUE),
+         X2010prop = X2010/sum(X2010, na.rm = TRUE),
+         X2015prop = X2015/sum(X2015, na.rm = TRUE),
+         X2020prop = X2020/sum(X2020, na.rm = TRUE),
+         X2024prop = X2024/sum(X2024, na.rm = TRUE))
 
 ```
-# maeve maps! yippee :) 
-```{r}
+
+# Section 2: Distribution map of migration in 2024
+
+## maeve maps! yippee :) 
+
+```{r migration map in 2024}
 # ------------------ Data ------------------
 # Expectation: migration.raw has columns: Origin, Destination, X2024 (numeric)
 # You already have: migration.raw
@@ -147,6 +137,11 @@ mig <- migration.raw %>%
          !is.na(Origin), !is.na(Destination),
          Origin != Destination)
 
+#Removing stars
+mig <- mig %>%
+      mutate(Destination = gsub("\\*", "", Destination),
+             Origin = gsub("\\*", "", Origin))
+
 # ------------------ Define "colonial powers" ------------------
 # Tweak this vector if your definition differs.
 colonial_powers_names <- c(
@@ -157,7 +152,7 @@ colonial_powers_names <- c(
 # colonial_powers_names <- c(colonial_powers_names, "Russia", "Turkey", "United States")
 
 # ------------------ Standardize country names -> ISO3 ------------------
-# Handle common name issues via countrycode (add manual overrides as needed)
+# Handle common name issues via countrycode (add manual overrides as needed). FRA is missing
 custom_map <- c(
   "Congo, Dem. Rep."       = "COD",
   "Congo, Rep."            = "COG",
@@ -173,7 +168,8 @@ custom_map <- c(
   "Syrian Arab Republic"   = "SYR",
   "United States of America" = "USA",
   "United States"          = "USA",
-  "Viet Nam"               = "VNM"
+  "Viet Nam"               = "VNM",
+  "France"  = "FRA"
 )
 
 to_iso3 <- function(x){
@@ -205,6 +201,12 @@ world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf") %>%
   st_transform(4326) %>%
   select(iso_a3, name, geometry)
 
+world <- world %>%
+  mutate(iso_a3 = case_when(
+    name == "France" ~ "FRA",
+    TRUE ~ iso_a3
+  ))
+
 # Use safe point-on-surface for label/centroid positions
 world_pts <- world %>%
   mutate(centroid = st_point_on_surface(geometry)) %>%
@@ -222,7 +224,7 @@ world_pts <- world %>%
   ) %>%
   rename(lon = X, lat = Y)
 
-# Join coordinates for origins and destinations
+# Join coordinates for origins and destinations - ISSUE WITH FRANCE IS HERE
 flows_coords <- flows_cp %>%
   left_join(world_pts %>% select(iso_a3, lon_o = lon, lat_o = lat),
             by = c("origin_iso3" = "iso_a3")) %>%
@@ -329,13 +331,14 @@ flows_wide <- flows_cp %>%
 
 ```
 
-```{r}
+```{r migration map using tmap, Maeve to fix}
 tmap_mode("view")
 
 # Helper: available origins to pick from
 available_powers <- sort(unique(flows_sf$origin_power))
 print(available_powers)
 
+#This is looking at how people are migration outwards, NOT inwards to colonial country.
 make_map_view <- function(power){
   # 1) validate name (allow iso3 too)
   pow_iso <- tryCatch(countrycode(power, "country.name", "iso3c"), error = function(...) NA_character_)
@@ -386,7 +389,9 @@ make_map_view <- function(power){
                                    bbox["xmax"], bbox["ymax"]), ncol = 2, byrow = TRUE))
 }
 
+
 # Example calls (pick from printed available_powers):
+<<<<<<< HEAD
 make_map_view("Netherlands")
 make_map_view("United Kingdom")
 make_map_view("Spain")
@@ -460,5 +465,73 @@ bad_map <- ggplot() +
   )
 
 bad_map
+=======
+make_map_view("Spain")
+make_map_view("United Kingdom")
+make_map_view("Portugal")
+make_map_view("France")
+
+
+```
+
+# Section 3: Questions in World Value Survey
+
+Migration
+- Q121 Impact of immigrants on the development of the country
+- Q122 Immigration in your country: Fills useful jobs in the workforce
+- Q123 Immigration in your country: Strengthens cultural diversity
+- Q124 Immigration in your country: Increases the crime rate
+- Q125 Immigration in your country: Gives asylum to political refugees
+- Q126 Immigration in your country: Increases the risks of terrorism
+- Q127 Immigration in your country: Helps poor people establish new lives
+- Q128 Immigration in your country: Increases unemployment
+- Q129 Immigration in your country: Leads to social conflict
+- Q130 Immigration policy preference
+
+Control
+- Q60: Trust: People you know personally
+- Q61: Trust: People you meet for the first time
+- Q62: Trust: People of another religion
+- Q63: Trust: People of another nationality
+
+# Appendix
+## Appendix 1: Example dyads
+The chunk below is analyzing in dyad, but please feel free to do something else.
+
+```{r migration flows in 2024, echo=FALSE}
+#Examining Understanding migration flows only for 2024
+require(data.table)
+dt <- data.table(migration.raw)
+View(dt[, max(X2024), by = Origin])
+
+max.migration <- data.frame(tapply(migration.raw$X2024, migration.raw$Origin, na.rm = TRUE))
+max.migration
+
+#Highest dyad of migration
+# Convert to data.table
+migrationdyad <- data.table(migration.raw)
+
+# Get rows with the max value of X2024 for each Destination
+migration.dyad <- migrationdyad[migrationdyad[, .I[which.max(X2024)], by = Destination]$V1]
+
+# View result
+View(migration.dyad)
+
+View(table(migration.dyad$Origin))
+
+#Dyad
+# Ensure dyads are treated as unordered pairs
+migrationdyad.df <- migration.raw %>%
+  rowwise() %>%
+  mutate(dyad = paste(sort(c(Origin, Destination)), collapse = "-")) %>%
+  ungroup()
+
+# Get the maximum value for each dyad
+migration.result <- migrationdyad.df %>%
+  group_by(dyad) %>%
+  summarise(max_value = max(X2024))
+
+View(migration.result)
+>>>>>>> 5fd1196d3932961d31462d3e87fe6f9b1dc132cc
 
 ```
