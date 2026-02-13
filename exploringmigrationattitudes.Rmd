@@ -532,6 +532,12 @@ migration.result <- migrationdyad.df %>%
   summarise(max_value = max(X2024))
 
 View(migration.result)
->>>>>>> 5fd1196d3932961d31462d3e87fe6f9b1dc132cc
+#>>>>>>> 5fd1196d3932961d31462d3e87fe6f9b1dc132cc
 
+```
+#loading in shapefile
+
+```{r}
+nutsshp <- "nutsfiles/usingforanalysis.shp"
+getwd()
 ```
