@@ -325,7 +325,7 @@ flows_wide <- flows_cp %>%
   summarise(value_2024 = sum(value_2024), .groups = "drop") %>%
   tidyr::pivot_wider(names_from = origin_power, values_from = value_2024, values_fill = 0)
 
-# View(flows_wide)  # uncomment in RStudio
+ View(flows_wide)  # uncomment in RStudio
 
 ```
 
@@ -387,8 +387,78 @@ make_map_view <- function(power){
 }
 
 # Example calls (pick from printed available_powers):
-#make_map_view("france")
+make_map_view("Netherlands")
 make_map_view("United Kingdom")
-# make_map_view("Portugal")
+make_map_view("Spain")
+
+```
+
+## using the migration.dyad dataset, trying to fix the france issue. 
+
+```{r}
+colonial_empires <- c(
+  "United Kingdom",
+  "France",
+  "Spain",
+  "Portugal",
+  "Netherlands",
+  "Belgium"
+)
+
+flows <- migration.dyad %>%
+  filter(Destination %in% colonial_empires) %>%
+  rename(migrants = X2024)
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Centroids for connecting lines
+centroids <- st_centroid(world) %>%
+  select(name_long) %>%
+  mutate(cx = st_coordinates(geometry)[,1],
+         cy = st_coordinates(geometry)[,2]) %>%
+  st_drop_geometry()
+
+flows_sf <- flows %>%
+  left_join(centroids, by = c("Origin" = "name_long")) %>%
+  rename(ox = cx, oy = cy) %>%
+  left_join(centroids, by = c("Destination" = "name_long")) %>%
+  rename(dx = cx, dy = cy)
+
+flows_sf <- flows_sf %>% filter(!is.na(ox) & !is.na(dx))
+
+flows_lines <- flows_sf %>%
+  rowwise() %>%
+  mutate(
+    geometry = st_sfc(
+      st_linestring(
+        rbind(c(ox, oy), c(dx, dy))
+      ), crs = 4326
+    )
+  ) %>%
+  st_as_sf()
+
+flows_lines <- flows_lines %>%
+  mutate(lw = rescale(sqrt(migrants), to = c(0.3, 3)))
+
+bad_map <- ggplot() +
+  geom_sf(data = world, fill = "gray90", color = "gray60", size = 0.1) +
+  geom_sf(data = flows_lines,
+          aes(size = lw),
+          color = "firebrick",
+          alpha = 0.7) +
+  scale_size_identity() +
+  labs(
+    title = "Migration into Former Colonial Empires (2024)",
+    subtitle = "Flows scaled using square-root transformation",
+    caption = "Source: migration.dyad"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 12)
+  )
+
+bad_map
 
 ```
