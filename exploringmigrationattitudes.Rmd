@@ -538,6 +538,110 @@ View(migration.result)
 #loading in shapefile
 
 ```{r}
-nutsshp <- "nutsfiles/usingforanalysis.shp"
+file.exists("NUTS.shp")
+nutsshp <- st_read("NUTS.shp")
 getwd()
+```
+#loading in migration data
+```{r}
+library(haven)
+biggroup<- read_dta("Biggest_group.dta")
+view(biggroup)
+names(biggroup)
+
+```
+
+## where everyone is coming from
+
+```{r}
+
+library(sf)
+library(dplyr)
+library(ggplot2)
+
+class(nutsshp)
+names(nutsshp)
+grep("nuts|id|code", names(nutsshp), ignore.case = TRUE, value = TRUE)
+
+
+# sanity checks: make sure both have NUTS_ID
+# nutsshp <- nutsshp %>% rename(NUTS_ID = NUTS_BN_ID)
+stopifnot("NUTS_ID" %in% names(nutsshp))
+stopifnot("NUTS_ID" %in% names(biggroup))
+stopifnot("group" %in% names(biggroup))
+
+head(nutsshp$NUTS_ID)
+head(biggroup$NUTS_ID)
+sum(as.character(nutsshp$NUTS_ID) %in% as.character(biggroup$NUTS_ID))
+
+
+nuts_map <- nutsshp %>%
+  mutate(NUTS_ID = as.character(NUTS_ID)) %>%
+  left_join(
+    biggroup %>%
+      mutate(NUTS_ID = as.character(NUTS_ID)) %>%
+      select(NUTS_ID, agg_groups, group),
+    by = "NUTS_ID"
+  )
+bb <- st_bbox(nuts_map)
+
+pad_x <- as.numeric(bb["xmax"] - bb["xmin"]) * 0.10
+pad_y <- as.numeric(bb["ymax"] - bb["ymin"]) * 0.10
+
+ggplot(nuts_map) +
+  geom_sf(aes(fill = group), color = "white", linewidth = 0.1) +
+  coord_sf(
+    xlim = c(bb["xmin"] + pad_x, bb["xmax"] - pad_x),
+    ylim = c(bb["ymin"] + pad_y, bb["ymax"] - pad_y),
+    datum = NA
+  ) +
+  labs(fill = "Majority immigrant origin group") +
+  theme_minimal()
+
+```
+
+```{r}
+library(tmap)
+
+tmap_mode("plot")
+
+tm_shape(nuts_map) +
+  tm_polygons(
+    fill = "group",
+    col = "white",
+    lwd = 0.1,
+    title = "Majority immigrant origin group"
+  ) +
+  tm_layout(frame = FALSE, legend.outside = TRUE)
+
+library(sf)
+library(tmap)
+
+tmap_mode("view")
+
+nuts_map_ll <- st_transform(nuts_map, 4326)
+
+tm_shape(nuts_map_ll) +
+  tm_polygons(
+    fill = "group",
+    col = "white",
+    lwd = 0.1,
+    id = "NUTS_ID",
+    popup.vars = c("NUTS_ID", "group"),
+    title = "Majority immigrant origin group"
+  ) +
+  tm_basemap("CartoDB.Positron")
+
+nuts_map_ll_s <- st_simplify(nuts_map_ll, dTolerance = 0.01, preserveTopology = TRUE)
+
+tm_shape(nuts_map_ll_s) +
+  tm_polygons(
+    fill = "group",
+    col = "white",
+    lwd = 0.1,
+    id = "NUTS_ID",
+    popup.vars = c("NUTS_ID", "group")
+  ) +
+  tm_basemap("CartoDB.Positron")
+
 ```
